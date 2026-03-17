@@ -37,11 +37,11 @@ def limpar_texto(texto):
     texto = re.sub(r'\n\d+\.º \.\.\.\n', '\n', texto)
     texto = re.sub(r'\n[a-z]\) \.\.\.\n', '\n', texto)
 
-    # NOVO: Remover alíneas isoladas com apenas "..."
+    # Remover alíneas isoladas com apenas "..."
     texto = re.sub(r'\b[a-z]\) \.\.\.\s*', '', texto)
     texto = re.sub(r'\n[a-z]\) \.\.\.$', '', texto, flags=re.MULTILINE)
 
-    # NOVO: Remover números seguidos de "..."
+    # Remover números seguidos de "..."
     texto = re.sub(r'\b\d+\.º \.\.\.\s*', '', texto)
     texto = re.sub(r'\b\d+ - \.\.\.\s*', '', texto)
 
@@ -64,21 +64,31 @@ try:
 
     conteudo = driver.find_element(By.TAG_NAME, "body").text
 
+    print("A procurar inicio dos artigos...")
+
+
+    match_titulo = re.search(r'Título I', conteudo, re.IGNORECASE)
+
+    if match_titulo:
+        inicio_artigos = match_titulo.start()
+        conteudo = conteudo[inicio_artigos:]
+        print(f"Encontrado 'Título I' - Preâmbulo removido!")
+    else:
+
+        match_artigo = re.search(r'Artigo 1\.º', conteudo)
+        if match_artigo:
+            inicio_artigos = match_artigo.start()
+            conteudo = conteudo[inicio_artigos:]
+            print("Encontrado 'Artigo 1.º' - Preâmbulo removido!")
+        else:
+            print("AVISO: Não foi possível encontrar o início. Processando tudo.")
+
     print("A estruturar em artigos...")
 
     # Dividir por artigos
     artigos = re.split(r'(Artigo \d+\.º(?:-[A-Z])?[^\n]*)', conteudo)
 
     artigos_estruturados = []
-
-    for artigo in artigos_estruturados:
-        # Limpeza adicional no conteúdo
-        conteudo = artigo['conteudo']
-
-        # Remover linhas que são só alíneas vazias consecutivas
-        conteudo = re.sub(r'([a-z]\) \.\.\.\s*){2,}', '', conteudo)
-
-        artigo['conteudo'] = conteudo.strip()
 
     for i in range(1, len(artigos), 2):
         if i + 1 < len(artigos):
@@ -95,7 +105,13 @@ try:
                     'conteudo': conteudo_artigo
                 })
 
-    # Guardar em formato de texto legível como codigo_estrada.txt
+
+    for artigo in artigos_estruturados:
+
+        conteudo = artigo['conteudo']
+        conteudo = re.sub(r'([a-z]\) \.\.\.\s*){2,}', '', conteudo)
+        artigo['conteudo'] = conteudo.strip()
+
     with open("codigo_estrada.txt", "w", encoding="utf-8") as f:
         for artigo in artigos_estruturados:
             f.write("\n" + "=" * 70 + "\n")
@@ -112,12 +128,7 @@ try:
     print("   - codigo_estrada.txt")
     print("   - codigo_estrada.json")
 
-    # Mostrar exemplo
-    print("\nExemplo de artigo limpo:")
-    print("=" * 70)
-    print(artigos_estruturados[0]['titulo'])
-    print("=" * 70)
-    print(artigos_estruturados[0]['conteudo'][:300] + "...")
+
 
 except Exception as e:
     print(f"Erro: {e}")
