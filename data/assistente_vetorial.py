@@ -67,7 +67,7 @@ else:
     print(f"Base vetorial criada com {len(artigos)} artigos!")
 
 
-def encontrar_artigos_relevantes(pergunta, top_k=2):
+def encontrar_artigos_relevantes(pergunta, top_k=3):
     """Encontra os artigos mais relevantes usando busca vetorial"""
 
     # Buscar na base vetorial
@@ -95,11 +95,11 @@ def encontrar_artigos_relevantes(pergunta, top_k=2):
     return artigos_relevantes
 
 
-def perguntar_ollama(pergunta, modelo="phi3:mini"):
+def perguntar_ollama(pergunta, modelo="llama3.1:8b"):
     """Pergunta ao Llama via Ollama"""
 
     print("\nProcurando artigos relevantes...")
-    artigos_relevantes = encontrar_artigos_relevantes(pergunta, top_k=2)
+    artigos_relevantes = encontrar_artigos_relevantes(pergunta, top_k=3)
 
     # Construir contexto
     contexto_parts = []
@@ -115,13 +115,21 @@ def perguntar_ollama(pergunta, modelo="phi3:mini"):
         print(
             f"  - {item['artigo']['titulo']} (relevancia: {item['relevancia']:.2f}, distancia: {item['distancia']:.2f})")
 
-    prompt = f"""Baseado nestes artigos do Codigo da Estrada portugues:
+    prompt = prompt = f"""Tu es um assistente especializado no Codigo da Estrada portugues.
+
+CONTEXTO (artigos relevantes do Codigo da Estrada):
 
 {contexto}
 
-Pergunta: {pergunta}
+INSTRUCOES:
+1. Responde APENAS com base no contexto fornecido acima
+2. Se a informacao nao estiver no contexto, diz "Nao encontrei essa informacao nos artigos fornecidos"
+3. Cita sempre o artigo especifico (exemplo: "Segundo o Artigo 27.º...")
+4. Responde de forma breve e direta em portugues
 
-Responde de forma breve e direta, citando o artigo quando relevante:"""
+PERGUNTA: {pergunta}
+
+RESPOSTA:"""
 
     print(f"\nPerguntando ao {modelo}...")
 
@@ -157,7 +165,7 @@ def main():
     print("    ASSISTENTE DO CODIGO DA ESTRADA (Busca Vetorial)")
     print("=" * 70)
 
-    modelo = "phi3:mini"
+    modelo = "llama3.1:8b"
     print(f"\nUsando modelo: {modelo}")
     print("Usando busca vetorial semantica (ChromaDB)")
     print("\nDigite 'sair' para terminar")
