@@ -146,7 +146,7 @@ RESPOSTA:"""
                     "num_predict": 250
                 }
             },
-            timeout=180
+            timeout=240
         )
 
         if response.status_code == 200:
