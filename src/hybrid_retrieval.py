@@ -1,0 +1,149 @@
+import os
+import pickle
+
+from rank_bm25 import BM25Okapi
+
+
+def _tokenize_pt(text: str) -> list:
+    """Tokenização simples para português: lowercase + split por espaço."""
+    return text.lower().split()
+
+
+class HybridRetriever:
+    """
+    Retrieval híbrido: ChromaDB (semântico) + BM25 (keyword), fundidos via RRF.
+
+    Uso:
+        retriever = HybridRetriever(collection, artigos, "data/bm25_index.pkl")
+        resultados = retriever.retrieve("limite de velocidade na autoestrada", k=5)
+    """
+
+    def __init__(self, collection, artigos: list, index_path: str):
+        """
+        Args:
+            collection: ChromaDB collection já inicializada (com embedding_function).
+            artigos:    Lista de dicts {"titulo": str, "conteudo": str}.
+            index_path: Caminho para guardar/carregar o índice BM25 em pickle.
+        """
+        self.collection = collection
+        self.artigos = artigos
+        self.index_path = index_path
+        self._bm25 = None
+        self._corpus_ids = None  # IDs do ChromaDB na mesma ordem do corpus BM25
+        self._load_or_build()
+
+    # ------------------------------------------------------------------
+    # Construção e persistência do índice
+    # ------------------------------------------------------------------
+
+    def _load_or_build(self):
+        if os.path.exists(self.index_path):
+            print("Carregando indice BM25 do disco...")
+            with open(self.index_path, "rb") as f:
+                data = pickle.load(f)
+            self._bm25 = data["bm25"]
+            self._corpus_ids = data["corpus_ids"]
+            print(f"Indice BM25 carregado ({len(self._corpus_ids)} documentos)")
+        else:
+            self._build_and_save()
+
+    def _build_and_save(self):
+        print("Construindo indice BM25 (primeira vez)...")
+        result = self.collection.get(include=["documents", "metadatas"])
+        ids = result["ids"]
+        documents = result["documents"]
+
+        tokenized_corpus = [_tokenize_pt(doc) for doc in documents]
+        self._bm25 = BM25Okapi(tokenized_corpus)
+        self._corpus_ids = ids
+
+        index_dir = os.path.dirname(self.index_path)
+        if index_dir:
+            os.makedirs(index_dir, exist_ok=True)
+
+        with open(self.index_path, "wb") as f:
+            pickle.dump({"bm25": self._bm25, "corpus_ids": self._corpus_ids}, f)
+
+        print(f"Indice BM25 guardado em '{self.index_path}' ({len(ids)} documentos)")
+
+    # ------------------------------------------------------------------
+    # Reciprocal Rank Fusion
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _rrf(rankings: list, k: int = 60) -> dict:
+        """
+        Reciprocal Rank Fusion.
+
+        Args:
+            rankings: Lista de listas de IDs ordenados por relevância (melhor primeiro).
+            k:        Constante de suavização (default=60).
+
+        Returns:
+            Dict {doc_id: rrf_score}.
+        """
+        scores = {}
+        for ranking in rankings:
+            for rank, doc_id in enumerate(ranking, start=1):
+                scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+        return scores
+
+    # ------------------------------------------------------------------
+    # Interface pública
+    # ------------------------------------------------------------------
+
+    def retrieve(self, query: str, k: int = 5) -> list:
+        """
+        Retrieval híbrido com RRF.
+
+        Retorna uma lista de dicts compatível com encontrar_artigos_relevantes:
+            [{"artigo": {...}, "relevancia": float, "distancia": float | None}]
+
+        Args:
+            query: Pergunta do utilizador.
+            k:     Número de documentos a devolver.
+
+        Returns:
+            Top-k documentos fundidos, ordenados por RRF score descendente.
+        """
+        n_candidates = max(k * 3, 20)
+        n_candidates = min(n_candidates, self.collection.count())
+
+        # --- Retrieval semântico (ChromaDB) ---
+        chroma_result = self.collection.query(
+            query_texts=[query],
+            n_results=n_candidates
+        )
+        chroma_ranking = chroma_result["ids"][0]
+        chroma_distances = {
+            doc_id: dist
+            for doc_id, dist in zip(chroma_result["ids"][0], chroma_result["distances"][0])
+        }
+
+        # --- Retrieval BM25 ---
+        tokenized_query = _tokenize_pt(query)
+        bm25_scores = self._bm25.get_scores(tokenized_query)
+        bm25_ranked_indices = sorted(
+            range(len(bm25_scores)),
+            key=lambda i: bm25_scores[i],
+            reverse=True
+        )[:n_candidates]
+        bm25_ranking = [self._corpus_ids[i] for i in bm25_ranked_indices]
+
+        # --- Reciprocal Rank Fusion ---
+        rrf_scores = self._rrf([chroma_ranking, bm25_ranking])
+
+        top_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:k]
+
+        # --- Montar resultado ---
+        results = []
+        for doc_id in top_ids:
+            indice = int(doc_id.split("_")[1])
+            distancia = chroma_distances.get(doc_id)
+            results.append({
+                "artigo": self.artigos[indice],
+                "relevancia": rrf_scores[doc_id],
+                "distancia": distancia,
+            })
+
+        return results
