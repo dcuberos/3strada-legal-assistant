@@ -1,12 +1,22 @@
 import os
 import pickle
+import re
 
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import RSLPStemmer
 from rank_bm25 import BM25Okapi
+
+nltk.download("stopwords", quiet=True)
+nltk.download("rslp", quiet=True)
+
+_stopwords_pt = set(stopwords.words("portuguese"))
+_stemmer = RSLPStemmer()
 
 
 def _tokenize_pt(text: str) -> list:
-    """Tokenização simples para português: lowercase + split por espaço."""
-    return text.lower().split()
+    tokens = re.sub(r"[^\w\s]", " ", text.lower()).split()
+    return [_stemmer.stem(t) for t in tokens if t not in _stopwords_pt and len(t) > 1]
 
 
 class HybridRetriever:
