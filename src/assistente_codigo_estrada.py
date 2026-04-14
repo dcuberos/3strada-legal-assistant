@@ -83,7 +83,7 @@ Responde de forma breve e direta, citando o artigo quando relevante:"""
                 "options": {
                     "temperature": 0.2,
                     "num_ctx": 2048,
-                    "num_predict": 250
+                    "num_predict": 512
                 }
             },
             timeout=60
