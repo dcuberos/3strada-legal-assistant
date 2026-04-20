@@ -110,10 +110,28 @@ try:
 
 
     for artigo in artigos_estruturados:
-
         conteudo = artigo['conteudo']
         conteudo = re.sub(r'([a-z]\) \.\.\.\s*){2,}', '', conteudo)
         artigo['conteudo'] = conteudo.strip()
+
+    _TABELA_VELOCIDADES = (
+        "\n\n"
+        "| Tipo de via            | Aut. Ligeiro | Motociclo | Aut. Pesado Mercad. | Aut. Pesado Pass. | Veíc. c/ Reboque | Veíc. c/ Reboque (pesado) |\n"
+        "|------------------------|:------------:|:---------:|:-------------------:|:-----------------:|:----------------:|:-------------------------:|\n"
+        "| Dentro das localidades |   50 km/h    |  50 km/h  |       50 km/h       |      50 km/h      |     50 km/h      |          50 km/h          |\n"
+        "| Fora das localidades   |   90 km/h    |  90 km/h  |       80 km/h       |      90 km/h      |     70 km/h      |          80 km/h          |\n"
+        "| Autoestrada            |  120 km/h    | 120 km/h  |       90 km/h       |     100 km/h      |     90 km/h      |         100 km/h          |\n"
+        "\n"
+    )
+    _MARCADOR = "as seguintes velocidades instantâneas (em quilómetros/hora):"
+
+    for artigo in artigos_estruturados:
+        if "27" in artigo["titulo"] and _MARCADOR in artigo["conteudo"]:
+            artigo["conteudo"] = artigo["conteudo"].replace(
+                _MARCADOR,
+                _MARCADOR + _TABELA_VELOCIDADES
+            )
+            break
 
     with open(os.path.join(DATA_DIR, "codigo_estrada.txt"), "w", encoding="utf-8") as f:
         for artigo in artigos_estruturados:

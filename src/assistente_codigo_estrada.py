@@ -82,8 +82,8 @@ Responde de forma breve e direta, citando o artigo quando relevante:"""
                 "stream": False,
                 "options": {
                     "temperature": 0.2,
-                    "num_ctx": 2048,
-                    "num_predict": 512
+                    "num_ctx": 8192,
+                    "num_predict": 2048
                 }
             },
             timeout=60
