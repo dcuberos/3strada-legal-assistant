@@ -89,6 +89,30 @@ def _lookup_por_numero(pergunta):
     return None
 
 
+def _enriquecer_com_regras_gerais(artigos_relevantes):
+    """Quando um artigo de Exceções é recuperado, inclui o artigo anterior (regra geral)."""
+    titulos_presentes = {item['artigo']['titulo'] for item in artigos_relevantes}
+    extras = []
+
+    for item in artigos_relevantes:
+        conteudo_inicio = item['artigo']['conteudo'].strip().lower()[:20]
+        if conteudo_inicio.startswith('exce'):
+            titulo = item['artigo']['titulo']
+            for i, art in enumerate(artigos):
+                if art['titulo'] == titulo and i > 0:
+                    anterior = artigos[i - 1]
+                    if anterior['titulo'] not in titulos_presentes:
+                        extras.append({
+                            'artigo': anterior,
+                            'relevancia': item['relevancia'] + 0.001,
+                            'distancia': None
+                        })
+                        titulos_presentes.add(anterior['titulo'])
+                    break
+
+    return extras + artigos_relevantes
+
+
 def encontrar_artigos_relevantes(pergunta, top_k=3):
     """Encontra os artigos mais relevantes usando busca vetorial"""
 
@@ -160,7 +184,8 @@ def perguntar_ollama(pergunta, modelo="llama3.1:8b"):
         artigos_relevantes = direto
     else:
         print("\nProcurando artigos relevantes (busca hibrida BM25 + vetorial)...")
-        artigos_relevantes = retriever.retrieve(pergunta, k=3)
+        artigos_relevantes = retriever.retrieve(pergunta, k=5)
+        artigos_relevantes = _enriquecer_com_regras_gerais(artigos_relevantes)
 
     # Construir contexto
     contexto_parts = []
@@ -184,10 +209,12 @@ CONTEXTO (artigos relevantes do Codigo da Estrada):
 {contexto}
 
 INSTRUCOES:
-1. Responde APENAS com base no contexto fornecido acima
-2. Se a informacao nao estiver no contexto, diz "Nao encontrei essa informacao nos artigos fornecidos"
-3. Cita sempre o artigo especifico (exemplo: "Segundo o Artigo 27.º...")
-4. Responde de forma breve e direta em portugues
+1. Responde APENAS com base no contexto fornecido acima.
+2. Se a informacao nao estiver no contexto, diz "Nao encontrei essa informacao nos artigos fornecidos".
+3. Cita sempre o artigo especifico (exemplo: "Segundo o Artigo 27.º...").
+4. Responde de forma breve e direta em portugues.
+5. REGRA GERAL vs EXCECOES: Se o contexto contiver um artigo de "Regra geral" e um de "Excecoes", responde primeiro com a regra geral e so depois menciona as excecoes. NUNCA apresentes uma excecao como se fosse a regra geral.
+6. Quando um artigo comecar por "Excecoes", isso significa que existem casos especificos em que a regra geral nao se aplica — esses casos sao excecoes, nao a norma.
 
 PERGUNTA: {pergunta}
 
@@ -212,18 +239,18 @@ RESPOSTA:"""
         )
 
         if response.status_code == 200:
-            return response.json()['response']
+            return response.json()['response'], artigos_relevantes
         else:
             try:
                 detalhe = response.json().get('error', response.text)
             except Exception:
                 detalhe = response.text
-            return f"Erro Ollama ({response.status_code}): {detalhe}"
+            return f"Erro Ollama ({response.status_code}): {detalhe}", artigos_relevantes
 
     except requests.exceptions.ConnectionError:
-        return "ERRO: Ollama nao esta a correr!\n\nSolucao:\n1. Abra um terminal\n2. Execute: ollama serve\n3. Tente novamente"
+        return "ERRO: Ollama nao esta a correr!\n\nSolucao:\n1. Abra um terminal\n2. Execute: ollama serve\n3. Tente novamente", []
     except Exception as e:
-        return f"Erro: {str(e)}"
+        return f"Erro: {str(e)}", artigos_relevantes
 
 
 def main():
@@ -280,7 +307,7 @@ def main():
         if not pergunta:
             continue
 
-        resposta = perguntar_ollama(pergunta, modelo)
+        resposta, _ = perguntar_ollama(pergunta, modelo)
         print(f"\nResposta:\n{resposta}\n")
         print("-" * 70)
 

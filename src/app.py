@@ -1,3 +1,4 @@
+import re
 import sys
 import os
 import asyncio
@@ -71,20 +72,29 @@ async def on_message(message: cl.Message):
         await msg.update()
         return
 
-    sources = await loop.run_in_executor(_executor, lambda: av.retriever.retrieve(pergunta, k=3))
-    resposta = await loop.run_in_executor(_executor, lambda: av.perguntar_ollama(pergunta))
+    resposta, sources = await loop.run_in_executor(_executor, lambda: av.perguntar_ollama(pergunta))
 
     elements = []
+    nomes_usados = set()
     for item in sources:
         titulo = item["artigo"]["titulo"]
         conteudo = item["artigo"]["conteudo"]
-        relevancia = item["relevancia"]
-        distancia = item["distancia"]
 
-        dist_str = f"  |  dist. semântica: {distancia:.4f}" if distancia is not None else ""
-        texto = f"**RRF: {relevancia:.4f}{dist_str}**\n\n{conteudo}"
+        # Chip label: remover . e º para evitar problemas de routing no Chainlit
+        # "Artigo 36.º" → "Artigo 36.º" seria o ideal, mas º causa colisões internas
+        # Usamos o número extraído: "Artigo 36"
+        numero = re.search(r'\d+(?:-[A-Z])?', titulo)
+        label = f"Artigo {numero.group()}" if numero else titulo
+        # Garantir unicidade entre artigos da mesma resposta
+        label_unico = label
+        sufixo = 1
+        while label_unico in nomes_usados:
+            label_unico = f"{label} ({sufixo})"
+            sufixo += 1
+        nomes_usados.add(label_unico)
 
-        elements.append(cl.Text(name=titulo, content=texto, display="side"))
+        conteudo_artigo = f"**{titulo}**\n\n{conteudo}"
+        elements.append(cl.Text(name=label_unico, content=conteudo_artigo, display="side"))
 
     msg.content = resposta
     msg.elements = elements
