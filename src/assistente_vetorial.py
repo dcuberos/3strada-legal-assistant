@@ -1,3 +1,4 @@
+import re
 import requests
 import json
 import chromadb
@@ -75,6 +76,19 @@ _bm25_index_path = os.path.join(DATA_DIR, "bm25_index.pkl")
 retriever = HybridRetriever(collection, artigos, _bm25_index_path)
 
 
+def _lookup_por_numero(pergunta):
+    match = re.search(r'artigo\s+(\d+)(?:\.º)?(?:-([A-Z]))?', pergunta, re.IGNORECASE)
+    if not match:
+        return None
+    numero = match.group(1)
+    sufixo = match.group(2)
+    titulo_alvo = f"Artigo {numero}.º" + (f"-{sufixo}" if sufixo else "")
+    for artigo in artigos:
+        if artigo["titulo"].startswith(titulo_alvo):
+            return [{"artigo": artigo, "relevancia": 1.0, "distancia": None}]
+    return None
+
+
 def encontrar_artigos_relevantes(pergunta, top_k=3):
     """Encontra os artigos mais relevantes usando busca vetorial"""
 
@@ -103,11 +117,50 @@ def encontrar_artigos_relevantes(pergunta, top_k=3):
     return artigos_relevantes
 
 
+def e_pergunta_relevante(pergunta, modelo="llama3.1:8b"):
+    """Verifica se a mensagem está relacionada com o Código da Estrada."""
+    prompt = f"""Responde apenas com "sim" ou "não", sem mais texto.
+A mensagem seguinte está relacionada com o Código da Estrada português, regras de trânsito, condução, veículos, infrações ou tópicos similares?
+
+Mensagem: {pergunta}
+
+Resposta:"""
+
+    try:
+        response = requests.post(
+            'http://localhost:11434/api/generate',
+            json={
+                "model": modelo,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 5,
+                    "num_ctx": 512
+                }
+            },
+            timeout=30
+        )
+        if response.status_code == 200:
+            resposta = response.json()['response'].strip().lower()
+            print(f"[Classificação] '{pergunta}' → {resposta!r}")
+            return resposta.startswith("sim")
+        return True  # em caso de erro, deixa passar
+    except Exception as e:
+        print(f"[Classificação] Erro: {e}")
+        return True  # em caso de erro, deixa passar
+
+
 def perguntar_ollama(pergunta, modelo="llama3.1:8b"):
     """Pergunta ao Llama via Ollama"""
 
-    print("\nProcurando artigos relevantes (busca hibrida BM25 + vetorial)...")
-    artigos_relevantes = retriever.retrieve(pergunta, k=3)
+    direto = _lookup_por_numero(pergunta)
+    if direto:
+        print(f"\nReferência directa detectada → {direto[0]['artigo']['titulo']}")
+        artigos_relevantes = direto
+    else:
+        print("\nProcurando artigos relevantes (busca hibrida BM25 + vetorial)...")
+        artigos_relevantes = retriever.retrieve(pergunta, k=3)
 
     # Construir contexto
     contexto_parts = []
@@ -151,8 +204,8 @@ RESPOSTA:"""
                 "stream": False,
                 "options": {
                     "temperature": 0.2,
-                    "num_ctx": 8192,
-                    "num_predict": 2048
+                    "num_ctx": 4096,
+                    "num_predict": 512
                 }
             },
             timeout=240
@@ -161,7 +214,11 @@ RESPOSTA:"""
         if response.status_code == 200:
             return response.json()['response']
         else:
-            return f"Erro: {response.status_code}"
+            try:
+                detalhe = response.json().get('error', response.text)
+            except Exception:
+                detalhe = response.text
+            return f"Erro Ollama ({response.status_code}): {detalhe}"
 
     except requests.exceptions.ConnectionError:
         return "ERRO: Ollama nao esta a correr!\n\nSolucao:\n1. Abra um terminal\n2. Execute: ollama serve\n3. Tente novamente"
