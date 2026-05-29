@@ -1,5 +1,20 @@
 .claude/
 data/chroma_db/
+data/bm25_index.pkl
+data/codigo_estrada.json
+data/codigo_estrada.txt
+
+# Relatórios e ficheiros Word
+*.docx
+~$*
+unpacked_relatorio/
+generate_relatorio.js
+
+# Cache de sessões Chainlit
+.files/
+
+# Ficheiros de teste soltos
+data/teste.txt
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

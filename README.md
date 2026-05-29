@@ -1,4 +1,4 @@
-# 3strada — Assistente do Código da Estrada Português
+# 3strada - Assistente do Código da Estrada Português
 
 Chatbot conversacional que responde a perguntas sobre o Código da Estrada português, usando recuperação híbrida (BM25 + ChromaDB) e um LLM local via Ollama.
 
@@ -26,7 +26,7 @@ ollama pull llama3.1:8b
 
 ```powershell
 # Clonar o repositório
-git clone <url-do-repo>
+git clone https://github.com/Dacni/Projeto-Final-LCDA
 cd Projeto-Final-LCDA
 
 # Criar ambiente virtual
