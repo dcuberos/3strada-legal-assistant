@@ -1,4 +1,3 @@
-import re
 import sys
 import os
 import asyncio
@@ -74,27 +73,19 @@ async def on_message(message: cl.Message):
 
     resposta, sources = await loop.run_in_executor(_executor, lambda: av.perguntar_ollama(pergunta))
 
-    elements = []
-    nomes_usados = set()
+    # Construir um único painel lateral com todos os artigos por ordem de relevância.
+    # Usar um único cl.Text evita bugs de routing do Chainlit e garante que o header
+    # da seta diz "Artigos Relevantes" em vez do nome interno do elemento.
+    elementos_texto = []
     for item in sources:
         titulo = item["artigo"]["titulo"]
         conteudo = item["artigo"]["conteudo"]
+        elementos_texto.append(f"**{titulo}**\n\n{conteudo}")
 
-        # Chip label: remover . e º para evitar problemas de routing no Chainlit
-        # "Artigo 36.º" → "Artigo 36.º" seria o ideal, mas º causa colisões internas
-        # Usamos o número extraído: "Artigo 36"
-        numero = re.search(r'\d+(?:-[A-Z])?', titulo)
-        label = f"Artigo {numero.group()}" if numero else titulo
-        # Garantir unicidade entre artigos da mesma resposta
-        label_unico = label
-        sufixo = 1
-        while label_unico in nomes_usados:
-            label_unico = f"{label} ({sufixo})"
-            sufixo += 1
-        nomes_usados.add(label_unico)
-
-        conteudo_artigo = f"**{titulo}**\n\n{conteudo}"
-        elements.append(cl.Text(name=label_unico, content=conteudo_artigo, display="side"))
+    elements = []
+    if elementos_texto:
+        conteudo_painel = "\n\n---\n\n".join(elementos_texto)
+        elements = [cl.Text(name="Artigos Relevantes", content=conteudo_painel, display="side")]
 
     msg.content = resposta
     msg.elements = elements

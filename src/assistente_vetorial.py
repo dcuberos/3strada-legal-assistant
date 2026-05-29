@@ -1,4 +1,5 @@
 import re
+import time
 import requests
 import json
 import chromadb
@@ -210,17 +211,20 @@ CONTEXTO (artigos relevantes do Codigo da Estrada):
 
 INSTRUCOES:
 1. Responde APENAS com base no contexto fornecido acima.
-2. Se a informacao nao estiver no contexto, diz "Nao encontrei essa informacao nos artigos fornecidos".
+2. Se a informacao nao estiver no contexto, diz apenas "Nao tenho informacao suficiente para responder a essa pergunta."
 3. Cita sempre o artigo especifico (exemplo: "Segundo o Artigo 27.º...").
 4. Responde de forma breve e direta em portugues.
 5. REGRA GERAL vs EXCECOES: Se o contexto contiver um artigo de "Regra geral" e um de "Excecoes", responde primeiro com a regra geral e so depois menciona as excecoes. NUNCA apresentes uma excecao como se fosse a regra geral.
 6. Quando um artigo comecar por "Excecoes", isso significa que existem casos especificos em que a regra geral nao se aplica — esses casos sao excecoes, nao a norma.
+7. NUNCA menciones o "contexto", os "artigos fornecidos", artigos "nao disponiveis" ou qualquer detalhe sobre o teu funcionamento interno. O utilizador nao sabe que existe um contexto. Se nao tens informacao, limita-te a dizer que nao tens informacao suficiente.
 
 PERGUNTA: {pergunta}
 
 RESPOSTA:"""
 
     print(f"\nPerguntando ao {modelo}...")
+
+    _t0 = time.perf_counter()
 
     try:
         response = requests.post(
@@ -235,8 +239,11 @@ RESPOSTA:"""
                     "num_predict": 512
                 }
             },
-            timeout=240
+            timeout=600
         )
+
+        _elapsed = time.perf_counter() - _t0
+        print(f"[TEMPO] Ollama respondeu em {_elapsed:.1f}s")
 
         if response.status_code == 200:
             return response.json()['response'], artigos_relevantes

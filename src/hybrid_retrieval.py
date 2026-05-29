@@ -81,21 +81,24 @@ class HybridRetriever:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _rrf(rankings: list, k: int = 60) -> dict:
+    def _rrf(rankings: list, weights: list = None, k: int = 60) -> dict:
         """
-        Reciprocal Rank Fusion.
+        Reciprocal Rank Fusion com pesos por lista.
 
         Args:
             rankings: Lista de listas de IDs ordenados por relevância (melhor primeiro).
+            weights:  Peso de cada lista (default: todas com peso 1).
             k:        Constante de suavização (default=60).
 
         Returns:
             Dict {doc_id: rrf_score}.
         """
+        if weights is None:
+            weights = [1.0] * len(rankings)
         scores = {}
-        for ranking in rankings:
+        for ranking, weight in zip(rankings, weights):
             for rank, doc_id in enumerate(ranking, start=1):
-                scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+                scores[doc_id] = scores.get(doc_id, 0.0) + weight / (k + rank)
         return scores
 
     # ------------------------------------------------------------------
@@ -116,7 +119,7 @@ class HybridRetriever:
         Returns:
             Top-k documentos fundidos, ordenados por RRF score descendente.
         """
-        n_candidates = max(k * 3, 20)
+        n_candidates = max(k * 10, 50)
         n_candidates = min(n_candidates, self.collection.count())
 
         # --- Retrieval semântico (ChromaDB) ---
@@ -140,8 +143,8 @@ class HybridRetriever:
         )[:n_candidates]
         bm25_ranking = [self._corpus_ids[i] for i in bm25_ranked_indices]
 
-        # --- Reciprocal Rank Fusion ---
-        rrf_scores = self._rrf([chroma_ranking, bm25_ranking])
+        # --- Reciprocal Rank Fusion (BM25 com peso 2x por ser mais preciso lexicalmente) ---
+        rrf_scores = self._rrf([chroma_ranking, bm25_ranking], weights=[1.0, 2.0])
 
         top_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:k]
 
