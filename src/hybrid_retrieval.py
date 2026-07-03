@@ -2,19 +2,29 @@ import os
 import pickle
 import re
 
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import RSLPStemmer
 from rank_bm25 import BM25Okapi
 
-nltk.download("stopwords", quiet=True)
-nltk.download("rslp", quiet=True)
+import config
 
-_stopwords_pt = set(stopwords.words("portuguese"))
-_stemmer = RSLPStemmer()
+_stopwords_pt = None
+_stemmer = None
+
+
+def _init_nltk():
+    global _stopwords_pt, _stemmer
+    if _stemmer is not None:
+        return
+    import nltk
+    from nltk.corpus import stopwords
+    from nltk.stem import RSLPStemmer
+    nltk.download("stopwords", quiet=True)
+    nltk.download("rslp", quiet=True)
+    _stopwords_pt = set(stopwords.words("portuguese"))
+    _stemmer = RSLPStemmer()
 
 
 def _tokenize_pt(text: str) -> list:
+    _init_nltk()
     tokens = re.sub(r"[^\w\s]", " ", text.lower()).split()
     return [_stemmer.stem(t) for t in tokens if t not in _stopwords_pt and len(t) > 1]
 
@@ -143,8 +153,11 @@ class HybridRetriever:
         )[:n_candidates]
         bm25_ranking = [self._corpus_ids[i] for i in bm25_ranked_indices]
 
-        # --- Reciprocal Rank Fusion (BM25 com peso 2x por ser mais preciso lexicalmente) ---
-        rrf_scores = self._rrf([chroma_ranking, bm25_ranking], weights=[1.0, 2.0])
+        # --- Reciprocal Rank Fusion ---
+        rrf_scores = self._rrf(
+            [chroma_ranking, bm25_ranking],
+            weights=[config.RRF_PESO_VETORIAL, config.RRF_PESO_BM25]
+        )
 
         top_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)
 

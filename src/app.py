@@ -10,6 +10,8 @@ if _SRC_DIR not in sys.path:
 import chainlit as cl
 import assistente_vetorial as _av
 
+_av.init()
+
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
