@@ -1,23 +1,13 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-import time
 import re
 import json
 import os
 
-url = "https://diariodarepublica.pt/dr/legislacao-consolidada/lei/2013-116041830"
-
-options = Options()
-options.add_argument('--headless')
-options.add_argument('--no-sandbox')
-options.add_argument('--disable-dev-shm-usage')
-
-driver = webdriver.Chrome(options=options)
+URL = "https://diariodarepublica.pt/dr/legislacao-consolidada/lei/2013-116041830"
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+
+_RE_ARTIGO = re.compile(r'^Artigo (\d+)\.º(?:-([A-Z]))?\s*$')
+_RE_HIERARQUIA = re.compile(r'^(Título|Capítulo|Secção|Subsecção) [IVXLC]+$')
 
 
 def limpar_texto(texto):
@@ -48,6 +38,10 @@ def limpar_texto(texto):
     texto = re.sub(r'\b\d+\.º \.\.\.\s*', '', texto)
     texto = re.sub(r'\b\d+ - \.\.\.\s*', '', texto)
 
+    # Remover metadados de alterações do DR ("Alterado pelo/a ..." e blocos "Notas")
+    texto = re.sub(r'^Alterado pelo/a .*$', '', texto, flags=re.MULTILINE)
+    texto = re.split(r'^Notas$', texto, flags=re.MULTILINE)[0]
+
     # Remover múltiplos espaços
     texto = re.sub(r' +', ' ', texto)
 
@@ -60,99 +54,172 @@ def limpar_texto(texto):
     return texto.strip()
 
 
-try:
-    print("A extrair Codigo da Estrada...")
-    driver.get(url)
-    time.sleep(5)
+def estruturar_artigos(texto):
+    """
+    Estrutura o texto legal (a partir de 'Título I') numa lista de artigos:
+        {artigo_id, numero, sufixo, titulo, epigrafe, capitulo, seccao,
+         revogado, conteudo}
 
-    conteudo = driver.find_element(By.TAG_NAME, "body").text
+    Os marcadores de hierarquia (Título/Capítulo/Secção) aparecem entre
+    artigos como duas linhas: o marcador e o nome. São extraídos para os
+    campos capitulo/seccao e removidos do conteúdo.
+    """
+    artigos = []
+    atual = None          # linhas do artigo em curso
+    cabecalho = None      # (numero, sufixo)
+    capitulo = None
+    seccao = None
+    pendente = None       # marcador de hierarquia à espera da linha do nome
 
-    print("A procurar inicio dos artigos...")
+    def fechar():
+        if cabecalho is None or not atual:
+            return
+        numero, sufixo = cabecalho
+        corpo = limpar_texto('\n'.join(atual))
+        linhas = corpo.split('\n', 1)
+        epigrafe = linhas[0].strip()
+        conteudo = linhas[1].strip() if len(linhas) > 1 else ''
+        if not conteudo and not epigrafe:
+            return
+        titulo = f"Artigo {numero}.º" + (f"-{sufixo}" if sufixo else "")
+        artigos.append({
+            'artigo_id': f"art{numero}{sufixo or ''}",
+            'numero': numero,
+            'sufixo': sufixo or '',
+            'titulo': f"{titulo} — {epigrafe}" if epigrafe else titulo,
+            'epigrafe': epigrafe,
+            'capitulo': capitulo,
+            'seccao': seccao,
+            'revogado': conteudo.strip() in ('', '[REVOGADO]'),
+            'conteudo': conteudo,
+        })
+
+    for linha in texto.split('\n'):
+        linha = linha.strip()
+
+        if pendente is not None:
+            # linha do nome do marcador de hierarquia anterior
+            tipo = pendente
+            if tipo == 'Título':
+                capitulo = None
+                seccao = None
+            elif tipo == 'Capítulo':
+                capitulo = linha
+                seccao = None
+            elif tipo == 'Secção':
+                seccao = linha
+            # Subsecção: granularidade abaixo de secção, não guardamos
+            pendente = None
+            continue
+
+        m = _RE_HIERARQUIA.match(linha)
+        if m:
+            fechar()
+            atual = None
+            cabecalho = None
+            pendente = m.group(1)
+            continue
+
+        m = _RE_ARTIGO.match(linha)
+        if m:
+            fechar()
+            cabecalho = (int(m.group(1)), m.group(2))
+            atual = []
+            continue
+
+        if linha == 'Alterações ao artigo':
+            continue
+
+        if atual is not None:
+            atual.append(linha)
+
+    fechar()
+    return artigos
 
 
-    match_titulo = re.search(r'Título I', conteudo, re.IGNORECASE)
-
-    if match_titulo:
-        inicio_artigos = match_titulo.start()
-        conteudo = conteudo[inicio_artigos:]
-        print(f"Encontrado 'Título I' - Preâmbulo removido!")
-    else:
-
-        match_artigo = re.search(r'Artigo 1\.º', conteudo)
-        if match_artigo:
-            inicio_artigos = match_artigo.start()
-            conteudo = conteudo[inicio_artigos:]
-            print("Encontrado 'Artigo 1.º' - Preâmbulo removido!")
-        else:
-            print("AVISO: Não foi possível encontrar o início. Processando tudo.")
-
-    print("A estruturar em artigos...")
-
-    # Dividir por artigos
-    artigos = re.split(r'(Artigo \d+\.º(?:-[A-Z])?[^\n]*)', conteudo)
-
-    artigos_estruturados = []
-
-    for i in range(1, len(artigos), 2):
-        if i + 1 < len(artigos):
-            titulo = artigos[i].strip()
-            conteudo_artigo = artigos[i + 1].strip()
-
-            # Limpar conteúdo
-            conteudo_artigo = limpar_texto(conteudo_artigo)
-
-            # Só adicionar se tiver conteúdo real (não apenas números vazios)
-            if conteudo_artigo and len(conteudo_artigo) > 10:
-                artigos_estruturados.append({
-                    'titulo': titulo,
-                    'conteudo': conteudo_artigo
-                })
+_TABELA_VELOCIDADES = (
+    "\n\n"
+    "| Tipo de via            | Aut. Ligeiro | Motociclo | Aut. Pesado Mercad. | Aut. Pesado Pass. | Veíc. c/ Reboque | Veíc. c/ Reboque (pesado) |\n"
+    "|------------------------|:------------:|:---------:|:-------------------:|:-----------------:|:----------------:|:-------------------------:|\n"
+    "| Dentro das localidades |   50 km/h    |  50 km/h  |       50 km/h       |      50 km/h      |     50 km/h      |          50 km/h          |\n"
+    "| Fora das localidades   |   90 km/h    |  90 km/h  |       80 km/h       |      90 km/h      |     70 km/h      |          80 km/h          |\n"
+    "| Autoestrada            |  120 km/h    | 120 km/h  |       90 km/h       |     100 km/h      |     90 km/h      |         100 km/h          |\n"
+    "\n"
+)
+_MARCADOR = "as seguintes velocidades instantâneas (em quilómetros/hora):"
 
 
-    for artigo in artigos_estruturados:
-        conteudo = artigo['conteudo']
-        conteudo = re.sub(r'([a-z]\) \.\.\.\s*){2,}', '', conteudo)
-        artigo['conteudo'] = conteudo.strip()
-
-    _TABELA_VELOCIDADES = (
-        "\n\n"
-        "| Tipo de via            | Aut. Ligeiro | Motociclo | Aut. Pesado Mercad. | Aut. Pesado Pass. | Veíc. c/ Reboque | Veíc. c/ Reboque (pesado) |\n"
-        "|------------------------|:------------:|:---------:|:-------------------:|:-----------------:|:----------------:|:-------------------------:|\n"
-        "| Dentro das localidades |   50 km/h    |  50 km/h  |       50 km/h       |      50 km/h      |     50 km/h      |          50 km/h          |\n"
-        "| Fora das localidades   |   90 km/h    |  90 km/h  |       80 km/h       |      90 km/h      |     70 km/h      |          80 km/h          |\n"
-        "| Autoestrada            |  120 km/h    | 120 km/h  |       90 km/h       |     100 km/h      |     90 km/h      |         100 km/h          |\n"
-        "\n"
-    )
-    _MARCADOR = "as seguintes velocidades instantâneas (em quilómetros/hora):"
-
-    for artigo in artigos_estruturados:
-        if "27" in artigo["titulo"] and _MARCADOR in artigo["conteudo"]:
-            artigo["conteudo"] = artigo["conteudo"].replace(
-                _MARCADOR,
-                _MARCADOR + _TABELA_VELOCIDADES
+def inserir_tabela_velocidades(artigos):
+    """O Artigo 27.º tem uma tabela de velocidades que o scraping perde."""
+    for artigo in artigos:
+        if artigo['numero'] == 27 and not artigo['sufixo'] and _MARCADOR in artigo['conteudo']:
+            artigo['conteudo'] = artigo['conteudo'].replace(
+                _MARCADOR, _MARCADOR + _TABELA_VELOCIDADES
             )
             break
+    return artigos
 
+
+def guardar(artigos):
     with open(os.path.join(DATA_DIR, "codigo_estrada.txt"), "w", encoding="utf-8") as f:
-        for artigo in artigos_estruturados:
+        for artigo in artigos:
             f.write("\n" + "=" * 70 + "\n")
             f.write(f"{artigo['titulo']}\n")
+            if artigo['capitulo']:
+                f.write(f"[{artigo['capitulo']}" + (f" / {artigo['seccao']}" if artigo['seccao'] else "") + "]\n")
             f.write("=" * 70 + "\n\n")
             f.write(f"{artigo['conteudo']}\n")
 
-    # Guardar em JSON
     with open(os.path.join(DATA_DIR, "codigo_estrada.json"), "w", encoding="utf-8") as f:
-        json.dump(artigos_estruturados, f, ensure_ascii=False, indent=2)
+        json.dump(artigos, f, ensure_ascii=False, indent=2)
 
-    print(f"{len(artigos_estruturados)} artigos extraidos e limpos!")
+
+def extrair():
+    """Extrai o texto integral do Código da Estrada do Diário da República."""
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options
+    import time
+
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+
+    driver = webdriver.Chrome(options=options)
+    try:
+        driver.get(URL)
+        time.sleep(5)
+        conteudo = driver.find_element(By.TAG_NAME, "body").text
+    finally:
+        driver.quit()
+
+    match = re.search(r'Título I\b', conteudo)
+    if match:
+        conteudo = conteudo[match.start():]
+        print("Encontrado 'Título I' - Preâmbulo removido!")
+    else:
+        print("AVISO: Não foi possível encontrar o início. Processando tudo.")
+
+    return conteudo
+
+
+def main():
+    print("A extrair Código da Estrada...")
+    texto = extrair()
+
+    print("A estruturar em artigos...")
+    artigos = estruturar_artigos(texto)
+    artigos = inserir_tabela_velocidades(artigos)
+
+    guardar(artigos)
+
+    revogados = sum(a['revogado'] for a in artigos)
+    print(f"{len(artigos)} artigos extraídos e limpos ({revogados} revogados)!")
     print("Ficheiros criados:")
     print("   - data/codigo_estrada.txt")
     print("   - data/codigo_estrada.json")
 
 
-
-except Exception as e:
-    print(f"Erro: {e}")
-
-finally:
-    driver.quit()
+if __name__ == "__main__":
+    main()

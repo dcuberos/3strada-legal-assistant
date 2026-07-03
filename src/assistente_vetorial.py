@@ -17,6 +17,16 @@ with open(os.path.join(DATA_DIR, "codigo_estrada.json"), "r", encoding="utf-8") 
 
 print(f"Carregados {len(artigos)} artigos")
 
+
+def _chunk_conteudo(conteudo):
+    """Divide o conteúdo por números (1 - ...) ou, na falta deles, por alíneas."""
+    partes = [p.strip() for p in re.split(r'(?m)^(?=\d+ - )', conteudo) if p.strip()]
+    if len(partes) <= 1:
+        alineas = [p.strip() for p in re.split(r'(?m)^(?=[a-z]{1,2}\) )', conteudo) if p.strip()]
+        if len(alineas) > 1:
+            partes = alineas
+    return partes or [conteudo]
+
 # Configurar ChromaDB
 print("Configurando base de dados vetorial...")
 
@@ -49,18 +59,22 @@ else:
 
     print("Adicionando artigos a base vetorial...")
 
-    # Preparar dados
+    # Preparar dados: um documento por chunk (número/alínea), com o título
+    # do artigo como contexto. O id "indice_chunk" permite reagrupar por artigo.
     ids = []
     documentos = []
     metadados = []
 
     for i, artigo in enumerate(artigos):
-        ids.append(f"artigo_{i}")
-        documentos.append(f"{artigo['titulo']}\n{artigo['conteudo']}")
-        metadados.append({
-            "titulo": artigo['titulo'],
-            "indice": i
-        })
+        if artigo['revogado']:
+            continue
+        for j, chunk in enumerate(_chunk_conteudo(artigo['conteudo'])):
+            ids.append(f"{i}_{j}")
+            documentos.append(f"{artigo['titulo']}\n{chunk}")
+            metadados.append({
+                "artigo_id": artigo['artigo_id'],
+                "indice": i
+            })
 
     # Adicionar em batch (mais rápido)
     collection.add(
@@ -69,7 +83,7 @@ else:
         metadatas=metadados
     )
 
-    print(f"Base vetorial criada com {len(artigos)} artigos!")
+    print(f"Base vetorial criada com {len(ids)} chunks de {len(artigos)} artigos!")
 
 
 # Inicializar retriever híbrido (BM25 + ChromaDB com RRF)
@@ -77,39 +91,38 @@ _bm25_index_path = os.path.join(DATA_DIR, "bm25_index.pkl")
 retriever = HybridRetriever(collection, artigos, _bm25_index_path)
 
 
+_indice_por_id = {artigo['artigo_id']: i for i, artigo in enumerate(artigos)}
+
+
 def _lookup_por_numero(pergunta):
-    match = re.search(r'artigo\s+(\d+)(?:\.º)?(?:-([A-Z]))?', pergunta, re.IGNORECASE)
+    match = re.search(r'artigo\s+(\d+)(?:\.º)?(?:-([A-Za-z]))?', pergunta, re.IGNORECASE)
     if not match:
         return None
-    numero = match.group(1)
-    sufixo = match.group(2)
-    titulo_alvo = f"Artigo {numero}.º" + (f"-{sufixo}" if sufixo else "")
+    numero = int(match.group(1))
+    sufixo = (match.group(2) or '').upper()
     for artigo in artigos:
-        if artigo["titulo"].startswith(titulo_alvo):
+        if artigo['numero'] == numero and artigo['sufixo'] == sufixo:
             return [{"artigo": artigo, "relevancia": 1.0, "distancia": None}]
     return None
 
 
 def _enriquecer_com_regras_gerais(artigos_relevantes):
     """Quando um artigo de Exceções é recuperado, inclui o artigo anterior (regra geral)."""
-    titulos_presentes = {item['artigo']['titulo'] for item in artigos_relevantes}
+    presentes = {item['artigo']['artigo_id'] for item in artigos_relevantes}
     extras = []
 
     for item in artigos_relevantes:
-        conteudo_inicio = item['artigo']['conteudo'].strip().lower()[:20]
-        if conteudo_inicio.startswith('exce'):
-            titulo = item['artigo']['titulo']
-            for i, art in enumerate(artigos):
-                if art['titulo'] == titulo and i > 0:
-                    anterior = artigos[i - 1]
-                    if anterior['titulo'] not in titulos_presentes:
-                        extras.append({
-                            'artigo': anterior,
-                            'relevancia': item['relevancia'] + 0.001,
-                            'distancia': None
-                        })
-                        titulos_presentes.add(anterior['titulo'])
-                    break
+        if item['artigo']['epigrafe'].lower().startswith('exce'):
+            i = _indice_por_id[item['artigo']['artigo_id']]
+            if i > 0:
+                anterior = artigos[i - 1]
+                if anterior['artigo_id'] not in presentes:
+                    extras.append({
+                        'artigo': anterior,
+                        'relevancia': item['relevancia'] + 0.001,
+                        'distancia': None
+                    })
+                    presentes.add(anterior['artigo_id'])
 
     return extras + artigos_relevantes
 

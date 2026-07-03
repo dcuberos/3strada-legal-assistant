@@ -146,17 +146,23 @@ class HybridRetriever:
         # --- Reciprocal Rank Fusion (BM25 com peso 2x por ser mais preciso lexicalmente) ---
         rrf_scores = self._rrf([chroma_ranking, bm25_ranking], weights=[1.0, 2.0])
 
-        top_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:k]
+        top_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)
 
-        # --- Montar resultado ---
+        # --- Montar resultado: reagrupar chunks pelo artigo de origem ---
+        # id do chunk = "indice_chunk"; o primeiro chunk (melhor RRF) representa o artigo
         results = []
+        vistos = set()
         for doc_id in top_ids:
-            indice = int(doc_id.split("_")[1])
-            distancia = chroma_distances.get(doc_id)
+            indice = int(doc_id.split("_")[0])
+            if indice in vistos:
+                continue
+            vistos.add(indice)
             results.append({
                 "artigo": self.artigos[indice],
                 "relevancia": rrf_scores[doc_id],
-                "distancia": distancia,
+                "distancia": chroma_distances.get(doc_id),
             })
+            if len(results) == k:
+                break
 
         return results
