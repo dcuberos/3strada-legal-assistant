@@ -158,6 +158,7 @@ Resposta:"""
                 "model": modelo,
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": "10m",
                 "options": {
                     "temperature": 0.0,
                     "num_predict": 5,
@@ -176,32 +177,33 @@ Resposta:"""
         return True  # em caso de erro, deixa passar
 
 
-def perguntar_ollama(pergunta, modelo="llama3.1:8b"):
-    """Pergunta ao Llama via Ollama"""
-
+def obter_artigos(pergunta):
+    """Retrieval: lookup directo por número ou busca híbrida BM25 + vetorial."""
     direto = _lookup_por_numero(pergunta)
     if direto:
         print(f"\nReferência directa detectada → {direto[0]['artigo']['titulo']}")
-        artigos_relevantes = direto
-    else:
-        print("\nProcurando artigos relevantes (busca hibrida BM25 + vetorial)...")
-        artigos_relevantes = retriever.retrieve(pergunta, k=5)
-        artigos_relevantes = _enriquecer_com_regras_gerais(artigos_relevantes)
+        return direto
 
-    # Construir contexto
-    contexto_parts = []
-    for item in artigos_relevantes:
-        art = item['artigo']
-        contexto_parts.append(f"{art['titulo']}\n{art['conteudo']}")
+    print("\nProcurando artigos relevantes (busca hibrida BM25 + vetorial)...")
+    artigos_relevantes = retriever.retrieve(pergunta, k=5)
+    artigos_relevantes = _enriquecer_com_regras_gerais(artigos_relevantes)
 
-    contexto = "\n\n---\n\n".join(contexto_parts)
-
-    # Mostrar artigos encontrados
     print("Artigos encontrados:")
     for item in artigos_relevantes:
         dist = item['distancia']
         dist_str = f"{dist:.2f}" if dist is not None else "n/a"
         print(f"  - {item['artigo']['titulo']} (rrf: {item['relevancia']:.4f}, dist: {dist_str})")
+
+    return artigos_relevantes
+
+
+def stream_resposta(pergunta, artigos_relevantes, modelo="llama3.1:8b"):
+    """Gera a resposta token a token (generator) via Ollama com stream=True."""
+
+    contexto = "\n\n---\n\n".join(
+        f"{item['artigo']['titulo']}\n{item['artigo']['conteudo']}"
+        for item in artigos_relevantes
+    )
 
     prompt = f"""Tu es um assistente especializado no Codigo da Estrada portugues.
 
@@ -232,32 +234,49 @@ RESPOSTA:"""
             json={
                 "model": modelo,
                 "prompt": prompt,
-                "stream": False,
+                "stream": True,
+                "keep_alive": "10m",
                 "options": {
                     "temperature": 0.2,
                     "num_ctx": 4096,
                     "num_predict": 512
                 }
             },
-            timeout=600
+            timeout=600,
+            stream=True
         )
 
-        _elapsed = time.perf_counter() - _t0
-        print(f"[TEMPO] Ollama respondeu em {_elapsed:.1f}s")
-
-        if response.status_code == 200:
-            return response.json()['response'], artigos_relevantes
-        else:
+        if response.status_code != 200:
             try:
                 detalhe = response.json().get('error', response.text)
             except Exception:
                 detalhe = response.text
-            return f"Erro Ollama ({response.status_code}): {detalhe}", artigos_relevantes
+            yield f"Erro Ollama ({response.status_code}): {detalhe}"
+            return
+
+        for line in response.iter_lines():
+            if not line:
+                continue
+            chunk = json.loads(line)
+            if chunk.get('response'):
+                yield chunk['response']
+            if chunk.get('done'):
+                break
+
+        _elapsed = time.perf_counter() - _t0
+        print(f"[TEMPO] Ollama respondeu em {_elapsed:.1f}s")
 
     except requests.exceptions.ConnectionError:
-        return "ERRO: Ollama nao esta a correr!\n\nSolucao:\n1. Abra um terminal\n2. Execute: ollama serve\n3. Tente novamente", []
+        yield "ERRO: Ollama nao esta a correr!\n\nSolucao:\n1. Abra um terminal\n2. Execute: ollama serve\n3. Tente novamente"
     except Exception as e:
-        return f"Erro: {str(e)}", artigos_relevantes
+        yield f"Erro: {str(e)}"
+
+
+def perguntar_ollama(pergunta, modelo="llama3.1:8b"):
+    """Pergunta ao Llama via Ollama (versão não-streaming, usada pelo CLI)."""
+    artigos_relevantes = obter_artigos(pergunta)
+    resposta = "".join(stream_resposta(pergunta, artigos_relevantes, modelo))
+    return resposta, artigos_relevantes
 
 
 def main():

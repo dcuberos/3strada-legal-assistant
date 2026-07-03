@@ -61,8 +61,12 @@ async def on_message(message: cl.Message):
 
     loop = asyncio.get_event_loop()
 
-    # Verificar se a pergunta é relevante para o Código da Estrada
-    relevante = await loop.run_in_executor(_executor, lambda: av.e_pergunta_relevante(pergunta))
+    # Classificador de relevância e retrieval em paralelo (o retrieval é local,
+    # não compete com o Ollama; se a pergunta for irrelevante descarta-se o resultado)
+    relevante, sources = await asyncio.gather(
+        loop.run_in_executor(_executor, av.e_pergunta_relevante, pergunta),
+        loop.run_in_executor(_executor, av.obter_artigos, pergunta),
+    )
     if not relevante:
         msg.content = (
             "Só consigo responder a perguntas sobre o **Código da Estrada português**.\n\n"
@@ -71,7 +75,24 @@ async def on_message(message: cl.Message):
         await msg.update()
         return
 
-    resposta, sources = await loop.run_in_executor(_executor, lambda: av.perguntar_ollama(pergunta))
+    # Streaming token-a-token: o generator síncrono corre num thread e empurra
+    # tokens para uma queue asyncio
+    queue = asyncio.Queue()
+
+    def _produzir():
+        try:
+            for token in av.stream_resposta(pergunta, sources):
+                loop.call_soon_threadsafe(queue.put_nowait, token)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    loop.run_in_executor(_executor, _produzir)
+
+    while True:
+        token = await queue.get()
+        if token is None:
+            break
+        await msg.stream_token(token)
 
     # Construir um único painel lateral com todos os artigos por ordem de relevância.
     # Usar um único cl.Text evita bugs de routing do Chainlit e garante que o header
@@ -87,6 +108,5 @@ async def on_message(message: cl.Message):
         conteudo_painel = "\n\n---\n\n".join(elementos_texto)
         elements = [cl.Text(name="Artigos Relevantes", content=conteudo_painel, display="side")]
 
-    msg.content = resposta
     msg.elements = elements
     await msg.update()
