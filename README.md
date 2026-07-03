@@ -8,7 +8,7 @@ Chatbot conversacional que responde a perguntas sobre o Código da Estrada portu
 |---|---|
 | Interface | [Chainlit](https://chainlit.io) |
 | LLM | [Ollama](https://ollama.com) - modelo `llama3.1:8b` |
-| Embeddings | `paraphrase-multilingual-MiniLM-L12-v2` (SentenceTransformers) |
+| Embeddings | `intfloat/multilingual-e5-base` (SentenceTransformers) |
 | Base vetorial | ChromaDB (persistente em `data/chroma_db/`) |
 | Recuperação | Híbrida: BM25 + ChromaDB com Reciprocal Rank Fusion (RRF) |
 

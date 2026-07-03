@@ -13,6 +13,15 @@ artigos = None
 collection = None
 retriever = None
 _indice_por_id = None
+_embed_query = None
+
+# Termos de linguagem corrente ausentes do texto legal; entram apenas nos
+# documentos indexados (embeddings + BM25), nunca no texto apresentado.
+# ponytail: mapa manual mínimo, alargar quando a avaliação mostrar mais gaps
+_PALAVRAS_CHAVE = {
+    "art84": "Palavras-chave: telemóvel, telefone, auscultadores, mãos livres.",
+    "art22": "Palavras-chave: buzina, buzinar, apitar.",
+}
 
 
 def _chunk_conteudo(conteudo):
@@ -28,12 +37,12 @@ def _chunk_conteudo(conteudo):
 def init():
     """Carrega artigos e índices (Chroma + BM25). Idempotente; a primeira
     chamada pode demorar (construção de embeddings se o índice não existir)."""
-    global artigos, collection, retriever, _indice_por_id
+    global artigos, collection, retriever, _indice_por_id, _embed_query
     if retriever is not None:
         return
 
     import chromadb
-    from chromadb.utils import embedding_functions
+    from sentence_transformers import SentenceTransformer
     from hybrid_retrieval import HybridRetriever
 
     print("Carregando Código da Estrada...")
@@ -45,24 +54,19 @@ def init():
     print("Configurando base de dados vetorial...")
     client = chromadb.PersistentClient(path=os.path.join(DATA_DIR, "chroma_db"))
 
-    # Modelo de embeddings multilingual (funciona bem em português)
-    embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=config.EMBEDDING_MODEL
-    )
+    # Embeddings calculados manualmente (o e5 usa prefixos diferentes para
+    # query e documento, o que a embedding_function do Chroma não suporta)
+    modelo_emb = SentenceTransformer(config.EMBEDDING_MODEL)
+    _embed_query = lambda q: modelo_emb.encode(
+        [config.EMBEDDING_PREFIXO_QUERY + q], normalize_embeddings=True)[0].tolist()
 
     if "codigo_estrada" in [col.name for col in client.list_collections()]:
         print("Base vetorial já existe. Carregando...")
-        collection = client.get_collection(
-            name="codigo_estrada",
-            embedding_function=embedding_function
-        )
+        collection = client.get_collection(name="codigo_estrada")
         print("Base vetorial carregada!")
     else:
         print("Criando nova base vetorial... (primeira vez pode demorar 1-2 minutos)")
-        collection = client.create_collection(
-            name="codigo_estrada",
-            embedding_function=embedding_function
-        )
+        collection = client.create_collection(name="codigo_estrada")
 
         # Um documento por chunk (número/alínea), com o título do artigo como
         # contexto. O id "indice_chunk" permite reagrupar por artigo.
@@ -72,18 +76,29 @@ def init():
         for i, artigo in enumerate(artigos):
             if artigo['revogado']:
                 continue
+            extra = _PALAVRAS_CHAVE.get(artigo['artigo_id'])
             for j, chunk in enumerate(_chunk_conteudo(artigo['conteudo'])):
                 ids.append(f"{i}_{j}")
-                documentos.append(f"{artigo['titulo']}\n{chunk}")
+                documentos.append(
+                    f"{artigo['titulo']}\n{extra}\n{chunk}" if extra
+                    else f"{artigo['titulo']}\n{chunk}"
+                )
                 metadados.append({
                     "artigo_id": artigo['artigo_id'],
                     "indice": i
                 })
 
-        collection.add(ids=ids, documents=documentos, metadatas=metadados)
+        embeddings = modelo_emb.encode(
+            [config.EMBEDDING_PREFIXO_DOC + d for d in documentos],
+            normalize_embeddings=True, batch_size=64
+        ).tolist()
+        collection.add(ids=ids, documents=documentos, embeddings=embeddings, metadatas=metadados)
         print(f"Base vetorial criada com {len(ids)} chunks de {len(artigos)} artigos!")
 
-    retriever = HybridRetriever(collection, artigos, os.path.join(DATA_DIR, "bm25_index.pkl"))
+    retriever = HybridRetriever(
+        collection, artigos, os.path.join(DATA_DIR, "bm25_index.pkl"),
+        embed_query=_embed_query
+    )
 
 
 def _lookup_por_numero(pergunta):
@@ -122,7 +137,7 @@ def _enriquecer_com_regras_gerais(artigos_relevantes):
 def encontrar_artigos_relevantes(pergunta, top_k=3):
     """Encontra os artigos mais relevantes usando apenas busca vetorial"""
     init()
-    resultados = collection.query(query_texts=[pergunta], n_results=top_k)
+    resultados = collection.query(query_embeddings=[_embed_query(pergunta)], n_results=top_k)
 
     artigos_relevantes = []
     for i in range(len(resultados['ids'][0])):

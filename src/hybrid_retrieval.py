@@ -38,16 +38,20 @@ class HybridRetriever:
         resultados = retriever.retrieve("limite de velocidade na autoestrada", k=5)
     """
 
-    def __init__(self, collection, artigos: list, index_path: str):
+    def __init__(self, collection, artigos: list, index_path: str, embed_query=None):
         """
         Args:
-            collection: ChromaDB collection já inicializada (com embedding_function).
-            artigos:    Lista de dicts {"titulo": str, "conteudo": str}.
-            index_path: Caminho para guardar/carregar o índice BM25 em pickle.
+            collection:  ChromaDB collection já inicializada.
+            artigos:     Lista de dicts dos artigos (schema de data_raw).
+            index_path:  Caminho para guardar/carregar o índice BM25 em pickle.
+            embed_query: Callable pergunta -> vector; obrigatório quando a
+                         collection não tem embedding_function (ex.: e5 com
+                         prefixos assimétricos).
         """
         self.collection = collection
         self.artigos = artigos
         self.index_path = index_path
+        self.embed_query = embed_query
         self._bm25 = None
         self._corpus_ids = None  # IDs do ChromaDB na mesma ordem do corpus BM25
         self._load_or_build()
@@ -133,10 +137,16 @@ class HybridRetriever:
         n_candidates = min(n_candidates, self.collection.count())
 
         # --- Retrieval semântico (ChromaDB) ---
-        chroma_result = self.collection.query(
-            query_texts=[query],
-            n_results=n_candidates
-        )
+        if self.embed_query is not None:
+            chroma_result = self.collection.query(
+                query_embeddings=[self.embed_query(query)],
+                n_results=n_candidates
+            )
+        else:
+            chroma_result = self.collection.query(
+                query_texts=[query],
+                n_results=n_candidates
+            )
         chroma_ranking = chroma_result["ids"][0]
         chroma_distances = {
             doc_id: dist
