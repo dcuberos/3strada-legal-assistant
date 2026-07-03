@@ -139,12 +139,22 @@ def encontrar_artigos_relevantes(pergunta, top_k=3):
 
 def e_pergunta_relevante(pergunta, modelo=config.MODELO):
     """Verifica se a mensagem está relacionada com o Código da Estrada."""
-    prompt = f"""Responde apenas com "sim" ou "não", sem mais texto.
-A mensagem seguinte está relacionada com o Código da Estrada português, regras de trânsito, condução, veículos, infrações ou tópicos similares?
+    # Few-shot para o modelo classificar a mensagem em vez de lhe responder
+    # (ex.: "Posso usar o telemóvel enquanto conduzo?" → respondia "não" à pergunta)
+    prompt = f"""A tua tarefa é classificar mensagens. NÃO respondas à mensagem.
+Diz apenas "sim" se a mensagem estiver relacionada com o Código da Estrada português, regras de trânsito, condução, veículos ou infrações, e "não" caso contrário.
 
-Mensagem: {pergunta}
+Mensagem: "Posso utilizar o telemóvel enquanto conduzo?"
+Classificação: sim
 
-Resposta:"""
+Mensagem: "receita de bolo de chocolate"
+Classificação: não
+
+Mensagem: "quanto é a multa por estacionar no passeio?"
+Classificação: sim
+
+Mensagem: "{pergunta}"
+Classificação:"""
 
     try:
         response = requests.post(
