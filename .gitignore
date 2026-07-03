@@ -227,3 +227,5 @@ __marimo__/
 .idea/
 data/bm25_index.pkl
 
+/.chainlit/
+
